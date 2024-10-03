@@ -6,20 +6,20 @@ from ast import literal_eval
 from concurrent.futures import Future
 from typing import Dict, Iterable, List, Optional, Set, Union
 
-import click
 from pygitguardian import GGClient
 from pygitguardian.models import Detail, MultiScanResult
 
+from ggshield.core import ui
 from ggshield.core.cache import Cache
 from ggshield.core.client import check_client_api_key
 from ggshield.core.constants import MAX_WORKERS
-from ggshield.core.errors import QuotaLimitReachedError, UnexpectedError
+from ggshield.core.errors import handle_api_error
 from ggshield.core.filter import (
     remove_ignored_from_result,
     remove_results_from_ignore_detectors,
 )
 from ggshield.core.scan import DecodeError, ScanContext, Scannable
-from ggshield.core.text_utils import STYLE, display_error, format_text, pluralize
+from ggshield.core.text_utils import pluralize
 from ggshield.core.types import IgnoredMatch
 from ggshield.core.ui.scanner_ui import ScannerUI
 
@@ -224,19 +224,10 @@ class SecretScanner:
 
 
 def handle_scan_chunk_error(detail: Detail, chunk: List[Scannable]) -> None:
-    # Use %s for status_code because it can be None. Logger is OK with an int being
-    # passed for a %s placeholder.
-    logger.error("status_code=%s detail=%s", detail.status_code, detail.detail)
-    if detail.status_code == 401:
-        raise click.UsageError(detail.detail)
-    if detail.status_code is None:
-        raise UnexpectedError(f"Scanning failed: {detail.detail}")
-    if detail.status_code == 403 and detail.detail == "Quota limit reached.":
-        raise QuotaLimitReachedError()
-
+    handle_api_error(detail)
     details = None
 
-    display_error("\nScanning failed. Results may be incomplete.")
+    ui.display_error("Scanning failed. Results may be incomplete.")
     try:
         # try to load as list of dicts to get per file details
         details = literal_eval(detail.detail)
@@ -245,24 +236,17 @@ def handle_scan_chunk_error(detail: Detail, chunk: List[Scannable]) -> None:
 
     if isinstance(details, list) and details:
         # if the details had per file details
-        display_error(
+        ui.display_error(
             f"Add the following {pluralize('file', len(details))}"
             " to your ignored_paths:"
         )
         for i, inner_detail in enumerate(details):
             if inner_detail:
-                click.echo(
-                    f"- {format_text(chunk[i].filename, STYLE['filename'])}:"
-                    f" {str(inner_detail)}",
-                    err=True,
-                )
+                ui.display_error(f"- {chunk[i].filename}: {str(inner_detail)}")
         return
     else:
         # if the details had a request error
-        filenames = ", ".join([file.filename for file in chunk])
-        display_error(
-            "The following chunk is affected:\n"
-            f"{format_text(filenames, STYLE['filename'])}"
-        )
+        filenames = "\n".join(f"- {file.filename}" for file in chunk)
+        ui.display_error(f"The following chunk is affected:\n{filenames}")
 
-        display_error(str(detail))
+        ui.display_error(str(detail))

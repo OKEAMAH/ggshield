@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 import requests
@@ -9,16 +10,13 @@ from .config import Config
 from .constants import DEFAULT_INSTANCE_URL
 from .errors import APIKeyCheckError, UnexpectedError, UnknownInstanceError
 from .ui.client_callbacks import ClientCallbacks
-from .ui.ggshield_ui import GGShieldUI
 
 
-def create_client_from_config(
-    config: Config, ui: Optional[GGShieldUI] = None
-) -> GGClient:
+def create_client_from_config(config: Config) -> GGClient:
     """
     Create a GGClient using parameters from Config.
     """
-    callbacks = ClientCallbacks(ui) if ui else None
+    callbacks = ClientCallbacks()
     try:
         api_key = config.api_key
         api_url = config.api_url
@@ -66,7 +64,7 @@ def create_client(
         return GGClient(
             api_key=api_key,
             base_uri=api_url,
-            user_agent="ggshield",
+            user_agent=os.getenv("GG_USER_AGENT", "ggshield"),
             timeout=60,
             session=session,
             callbacks=callbacks,

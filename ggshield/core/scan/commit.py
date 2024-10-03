@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Pattern, Sequence, Set
 
-from ggshield.core.text_utils import STYLE, format_text
 from ggshield.utils.git_shell import git
 from ggshield.utils.itertools import batched
 from ggshield.utils.os import getenv_int
@@ -13,6 +12,9 @@ from .commit_utils import (
     PATCH_PREFIX,
     STAGED_PREFIX,
     CommitScannable,
+    get_diff_files,
+    get_file_sha_in_ref,
+    get_file_sha_stage,
     parse_patch,
 )
 from .scannable import Scannable
@@ -74,6 +76,39 @@ class Commit:
         return Commit(sha, parser, info)
 
     @staticmethod
+    def from_merge(
+        exclusion_regexes: Optional[Set[Pattern[str]]] = None,
+        merge_branch: str = "MERGE_HEAD",
+        cwd: Optional[Path] = None,
+    ) -> "Commit":
+
+        diff_files = get_diff_files(cwd=cwd)
+
+        shas_in_merge_branch = dict(
+            get_file_sha_in_ref(merge_branch, diff_files, cwd=cwd)
+        )
+        shas_in_head = dict(get_file_sha_in_ref("HEAD", diff_files, cwd=cwd))
+
+        files_to_scan = set()
+        for path, sha in get_file_sha_stage(diff_files, cwd=cwd):
+            # The file is either new or different from both HEAD and MERGE_HEAD
+            if sha not in {shas_in_head.get(path), shas_in_merge_branch.get(path)}:
+                files_to_scan.add(path)
+
+        def parser_merge(commit: "Commit") -> Iterable[Scannable]:
+            patch = git(
+                ["diff", "--staged", *PATCH_COMMON_ARGS, *files_to_scan], cwd=cwd
+            )
+            yield from parse_patch(
+                STAGED_PREFIX,
+                DIFF_EMPTY_COMMIT_INFO_BLOCK + patch,
+                exclusion_regexes,
+            )
+
+        info = CommitInformation.from_staged(cwd)
+        return Commit(sha=None, patch_parser=parser_merge, info=info)
+
+    @staticmethod
     def from_staged(
         exclusion_regexes: Optional[Set[Pattern[str]]] = None,
         cwd: Optional[Path] = None,
@@ -103,15 +138,6 @@ class Commit:
             yield from parse_patch(sha, patch, exclusion_regexes)
 
         return Commit(sha=None, patch_parser=parser, info=info)
-
-    @property
-    def optional_header(self) -> str:
-        """Return the formatted patch."""
-        return (
-            format_text(f"\ncommit {self.sha}\n", STYLE["commit_info"])
-            + f"Author: {self.info.author} <{self.info.email}>\n"
-            + f"Date: {self.info.date}\n"
-        )
 
     def get_files(self) -> Iterable[Scannable]:
         """
